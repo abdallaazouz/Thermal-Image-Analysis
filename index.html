@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Thermal Image Analysis with Black Pixel Grouping</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin: 50px;
+        }
+        canvas {
+            margin-top: 20px;
+            width: 500px;
+            height: 500px;
+            border: 1px solid black;
+        }
+        #saveButton {
+            margin-top: 20px;
+            padding: 10px 20px;
+            font-size: 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <h1>Thermal Image Analysis</h1>
+    <input type="file" id="imageUpload" accept="image/*">
+    <canvas id="canvas"></canvas>
+    <br>
+    <button id="saveButton">Save Image</button>
+
+    <script>
+        const imageUpload = document.getElementById('imageUpload');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const saveButton = document.getElementById('saveButton');
+
+        imageUpload.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            const reader = new FileReader();
+
+            reader.onload = (e) => {
+                const img = new Image();
+                img.src = e.target.result;
+
+                img.onload = () => {
+                    // ضبط حجم القماش ليكون 500x500 بيكسل
+                    canvas.width = 500;
+                    canvas.height = 500;
+
+                    // رسم الصورة على القماش مع الحفاظ على نسبة الطول إلى العرض
+                    const scaleFactor = Math.min(canvas.width / img.width, canvas.height / img.height);
+                    const x = (canvas.width / 2) - (img.width / 2) * scaleFactor;
+                    const y = (canvas.height / 2) - (img.height / 2) * scaleFactor;
+                    ctx.drawImage(img, x, y, img.width * scaleFactor, img.height * scaleFactor);
+
+                    // الحصول على بيانات الصورة
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const data = imageData.data;
+
+                    // تحليل درجات السطوع واستبدالها بألوان حرارية
+                    for (let i = 0; i < data.length; i += 4) {
+                        const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
+
+                        const thermalColor = getThermalColor(brightness);
+
+                        data[i] = thermalColor.r;
+                        data[i + 1] = thermalColor.g;
+                        data[i + 2] = thermalColor.b;
+                    }
+
+                    // تعديل البيكسلات الباردة المحاطة بالبيكسلات الساخنة
+                    for (let i = 0; i < data.length; i += 4) {
+                        const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
+
+                        if (brightness < 50 && isSurroundedByHotPixels(i, data, canvas.width)) {
+                            // استبدال البيكسل البارد باللون الأصفر
+                            data[i] = 255;    // أحمر
+                            data[i + 1] = 255;  // أخضر
+                            data[i + 2] = 0;    // أزرق
+                        }
+                    }
+
+                    // تجميع البيكسلات السوداء وزيادة تحديدها
+                    for (let i = 0; i < data.length; i += 4) {
+                        const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
+                        
+                        // تحقق من كون البيكسل باللون الأسود
+                        if (brightness < 30) {
+                            const blackNeighbors = countBlackNeighbors(i, data, canvas.width);
+
+                            // إذا كانت البيكسلات المتجاورة تحتوي على الكثير من البيكسلات السوداء، نزيد تحديد اللون الأسود
+                            if (blackNeighbors > 3) {
+                                data[i] = 0;    // أحمر
+                                data[i + 1] = 0;  // أخضر
+                                data[i + 2] = 0;    // أزرق
+                            }
+                        }
+                    }
+
+                    // عرض الصورة الحرارية
+                    ctx.putImageData(imageData, 0, 0);
+                };
+            };
+
+            reader.readAsDataURL(file);
+        });
+
+        function getThermalColor(brightness) {
+            const maxBrightness = 255;
+            const minBrightness = 0;
+            const ratio = brightness / maxBrightness;
+
+            if (ratio < 0.5) {
+                // الانتقال من الأزرق إلى السماوي
+                const blueIntensity = 255 - Math.floor(ratio * 2 * 255);
+                return { r: 0, g: 0, b: blueIntensity };
+            } else {
+                // الانتقال من السماوي إلى الأحمر
+                const redIntensity = Math.floor((ratio - 0.5) * 2 * 255);
+                return { r: redIntensity, g: 0, b: 0 };
+            }
+        }
+
+        function isSurroundedByHotPixels(index, data, width) {
+            const threshold = 200; // درجة سطوع للبيكسلات الساخنة
+            const x = (index / 4) % width;
+            const y = Math.floor((index / 4) / width);
+
+            // فحص البيكسلات المحيطة (الأعلى، الأسفل، اليمين، اليسار)
+            const surroundingPixels = [
+                getPixelBrightness(data, x - 1, y, width),
+                getPixelBrightness(data, x + 1, y, width),
+                getPixelBrightness(data, x, y - 1, width),
+                getPixelBrightness(data, x, y + 1, width)
+            ];
+
+            // إذا كانت كل البيكسلات المحيطة ساخنة، يتم إرجاع true
+            return surroundingPixels.every(brightness => brightness > threshold);
+        }
+
+        function getPixelBrightness(data, x, y, width) {
+            if (x < 0 || y < 0 || x >= width || y * width * 4 >= data.length) return 0;
+
+            const index = (y * width + x) * 4;
+            return (data[index] + data[index + 1] + data[index + 2]) / 3;
+        }
+
+        function countBlackNeighbors(index, data, width) {
+            const x = (index / 4) % width;
+            const y = Math.floor((index / 4) / width);
+            let blackCount = 0;
+
+            const neighbors = [
+                getPixelBrightness(data, x - 1, y, width),
+                getPixelBrightness(data, x + 1, y, width),
+                getPixelBrightness(data, x, y - 1, width),
+                getPixelBrightness(data, x, y + 1, width)
+            ];
+
+            // عدّ البيكسلات المجاورة التي تكون ساطعة بسطوع منخفض (أي أنها سوداء أو قريبة من الأسود)
+            blackCount = neighbors.filter(brightness => brightness < 30).length;
+
+            return blackCount;
+        }
+
+        saveButton.addEventListener('click', () => {
+            const link = document.createElement('a');
+            link.download = 'thermal_image.png';
+            link.href = canvas.toDataURL();
+            link.click();
+        });
+    </script>
+</body>
+</html>
